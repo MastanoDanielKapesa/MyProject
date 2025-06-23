@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home Surveillance Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary: #2b5876;
+            --secondary: #4e4376;
+            --accent: #4fc3f7;
+            --dark: #1a1a2e;
+            --light: #f8f9fa;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            color: #333;
+            overflow-x: hidden;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            padding: 15px;
+        }
+        .header {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 15px 20px;
+            border-radius: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .camera-card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        .camera-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.15);
+        }
+        .camera-container {
+            position: relative;
+            width: 100%;
+            padding-top: 56.25%; /* 16:9 Aspect Ratio */
+            background: #000;
+        }
+        .camera-feed {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .camera-info {
+            padding: 12px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .camera-name {
+            font-weight: 600;
+            color: var(--dark);
+        }
+        .camera-status {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.8rem;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4caf50;
+        }
+        .status-indicator.offline {
+            background: #f44336;
+        }
+        .camera-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 5px;
+            z-index: 10;
+        }
+        .control-btn {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .control-btn:hover {
+            background: var(--accent);
+            transform: scale(1.1);
+        }
+        .fullscreen-btn {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            z-index: 10;
+        }
+        .timestamp {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            z-index: 10;
+        }
+        .room-section {
+            grid-column: 1 / -1;
+            margin-top: 10px;
+            padding: 10px 0;
+            border-bottom: 2px solid #eee;
+            color: var(--primary);
+            font-weight: 600;
+        }
+        .alert-banner {
+            grid-column: 1 / -1;
+            background: #ff5252;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.8; }
+            50% { opacity: 1; }
+            100% { opacity: 0.8; }
+        }
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+        @media (max-width: 480px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <h1><i class="fas fa-home"></i> Whole-Home Surveillance</h1>
+            <div id="current-time"></div>
+        </div>
+
+        <!-- Alert Banner (shown when motion detected) -->
+        <div class="alert-banner" id="motion-alert" style="display: none;">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span id="alert-message">Motion detected at Front Door</span>
+        </div>
+
+        <!-- Outdoor Cameras -->
+        <div class="room-section">
+            <i class="fas fa-tree"></i> Outdoor Surveillance
+        </div>
+        
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="front-door-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Front+Door+Camera+Loading" alt="Front Door">
+                <div class="timestamp" id="front-door-time">--:--:--</div>
+                <div class="camera-controls">
+                    <button class="control-btn" title="Take Snapshot" onclick="takeSnapshot('front-door')">
+                        <i class="fas fa-camera"></i>
+                    </button>
+                    <button class="control-btn" title="Toggle IR Mode" onclick="toggleIR('front-door')">
+                        <i class="fas fa-moon"></i>
+                    </button>
+                </div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('front-door-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Front Door</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="backyard-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Backyard+Camera+Loading" alt="Backyard">
+                <div class="timestamp" id="backyard-time">--:--:--</div>
+                <div class="camera-controls">
+                    <button class="control-btn" title="Take Snapshot" onclick="takeSnapshot('backyard')">
+                        <i class="fas fa-camera"></i>
+                    </button>
+                    <button class="control-btn" title="Toggle IR Mode" onclick="toggleIR('backyard')">
+                        <i class="fas fa-moon"></i>
+                    </button>
+                </div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('backyard-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Backyard</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="garage-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Garage+Camera+Loading" alt="Garage">
+                <div class="timestamp" id="garage-time">--:--:--</div>
+                <div class="camera-controls">
+                    <button class="control-btn" title="Take Snapshot" onclick="takeSnapshot('garage')">
+                        <i class="fas fa-camera"></i>
+                    </button>
+                </div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('garage-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Garage</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="driveway-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Driveway+Camera+Loading" alt="Driveway">
+                <div class="timestamp" id="driveway-time">--:--:--</div>
+                <div class="camera-controls">
+                    <button class="control-btn" title="Take Snapshot" onclick="takeSnapshot('driveway')">
+                        <i class="fas fa-camera"></i>
+                    </button>
+                </div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('driveway-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Driveway</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <!-- Indoor Cameras - Living Areas -->
+        <div class="room-section">
+            <i class="fas fa-couch"></i> Living Areas
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="living-room-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Living+Room+Camera+Loading" alt="Living Room">
+                <div class="timestamp" id="living-room-time">--:--:--</div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('living-room-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Living Room</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="kitchen-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Kitchen+Camera+Loading" alt="Kitchen">
+                <div class="timestamp" id="kitchen-time">--:--:--</div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('kitchen-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Kitchen</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="dining-room-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Dining+Room+Camera+Loading" alt="Dining Room">
+                <div class="timestamp" id="dining-room-time">--:--:--</div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('dining-room-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Dining Room</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <!-- Bedrooms -->
+        <div class="room-section">
+            <i class="fas fa-bed"></i> Bedrooms
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="master-bedroom-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Master+Bedroom+Camera+Loading" alt="Master Bedroom">
+                <div class="timestamp" id="master-bedroom-time">--:--:--</div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('master-bedroom-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Master Bedroom</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="kids-bedroom-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Kids+Bedroom+Camera+Loading" alt="Kids Bedroom">
+                <div class="timestamp" id="kids-bedroom-time">--:--:--</div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('kids-bedroom-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Kids Bedroom</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="guest-room-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Guest+Room+Camera+Loading" alt="Guest Room">
+                <div class="timestamp" id="guest-room-time">--:--:--</div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('guest-room-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Guest Room</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <!-- Utility Areas -->
+        <div class="room-section">
+            <i class="fas fa-tools"></i> Utility Areas
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="laundry-room-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Laundry+Room+Camera+Loading" alt="Laundry Room">
+                <div class="timestamp" id="laundry-room-time">--:--:--</div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('laundry-room-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Laundry Room</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="camera-card">
+            <div class="camera-container">
+                <img id="basement-cam" class="camera-feed" src="https://via.placeholder.com/800x450?text=Basement+Camera+Loading" alt="Basement">
+                <div class="timestamp" id="basement-time">--:--:--</div>
+                <button class="control-btn fullscreen-btn" title="Fullscreen" onclick="toggleFullscreen('basement-cam')">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            <div class="camera-info">
+                <span class="camera-name">Basement</span>
+                <span class="camera-status">
+                    <span class="status-indicator"></span>
+                    <span>Online</span>
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // MQTT Client Setup
+        const client = mqtt.connect('wss://test.mosquitto.org:8081') // Public test broker
+        
+        // Camera configuration
+        const cameras = {
+            'front-door': { element: 'front-door-cam', timestamp: 'front-door-time' },
+            'backyard': { element: 'backyard-cam', timestamp: 'backyard-time' },
+            'garage': { element: 'garage-cam', timestamp: 'garage-time' },
+            'driveway': { element: 'driveway-cam', timestamp: 'driveway-time' },
+            'living-room': { element: 'living-room-cam', timestamp: 'living-room-time' },
+            'kitchen': { element: 'kitchen-cam', timestamp: 'kitchen-time' },
+            'dining-room': { element: 'dining-room-cam', timestamp: 'dining-room-time' },
+            'master-bedroom': { element: 'master-bedroom-cam', timestamp: 'master-bedroom-time' },
+            'kids-bedroom': { element: 'kids-bedroom-cam', timestamp: 'kids-bedroom-time' },
+            'guest-room': { element: 'guest-room-cam', timestamp: 'guest-room-time' },
+            'laundry-room': { element: 'laundry-room-cam', timestamp: 'laundry-room-time' },
+            'basement': { element: 'basement-cam', timestamp: 'basement-time' }
+        };
+
+        // Initialize MQTT
+        client.on('connect', () => {
+            console.log('Connected to MQTT broker');
+            
+            // Subscribe to all camera feeds
+            Object.keys(cameras).forEach(camId => {
+                client.subscribe(`home/camera/${camId}/feed`);
+            });
+            
+            // Subscribe to motion alerts
+            client.subscribe('home/security/motion');
+        });
+
+        // Handle incoming messages
+        client.on('message', (topic, message) => {
+            const data = JSON.parse(message.toString());
+            const camId = topic.split('/')[2];
+            
+            // Update camera feed
+            if (topic.includes('camera') && cameras[camId]) {
+                updateCameraFeed(camId, data);
+            }
+            
+            // Handle motion alerts
+            if (topic.includes('motion')) {
+                handleMotionAlert(data);
+            }
+        });
+
+        // Update camera feed with new image
+        function updateCameraFeed(camId, data) {
+            const cam = cameras[camId];
+            const imgElement = document.getElementById(cam.element);
+            const timeElement = document.getElementById(cam.timestamp);
+            
+            // Update image with cache busting
+            imgElement.src = data.image_url + '?t=' + new Date().getTime();
+            
+            // Update timestamp
+            if (data.timestamp) {
+                const time = new Date(data.timestamp);
+                timeElement.textContent = time.toLocaleTimeString();
+            }
+            
+            // Update status indicator
+            updateCameraStatus(camId, data.status || 'online');
+        }
+
+        // Update camera online status
+        function updateCameraStatus(camId, status) {
+            const cam = cameras[camId];
+            if (!cam) return;
+            
+            const statusElement = document.querySelector(`#${cam.element}-container .status-indicator`);
+            if (statusElement) {
+                statusElement.classList.toggle('offline', status !== 'online');
+            }
+        }
+
+        // Handle motion detection alerts
+        function handleMotionAlert(data) {
+            const alertElement = document.getElementById('motion-alert');
+            const messageElement = document.getElementById('alert-message');
+            
+            if (data.location && data.type === 'motion') {
+                messageElement.textContent = `Motion detected at ${data.location}`;
+                alertElement.style.display = 'flex';
+                
+                // Flash the affected camera
+                if (cameras[data.camera_id]) {
+                    const camElement = document.getElementById(cameras[data.camera_id].element);
+                    camElement.style.border = '3px solid red';
+                    setTimeout(() => {
+                        camElement.style.border = 'none';
+                    }, 2000);
+                }
+                
+                // Hide alert after 10 seconds
+                setTimeout(() => {
+                    alertElement.style.display = 'none';
+                }, 10000);
+            }
+        }
+
+        // Camera control functions
+        function takeSnapshot(camId) {
+            client.publish(`home/camera/${camId}/control`, JSON.stringify({
+                action: 'snapshot',
+                timestamp: new Date().toISOString()
+            }));
+            alert(`Snapshot taken from ${camId.replace('-', ' ')} camera`);
+        }
+
+        function toggleIR(camId) {
+            client.publish(`home/camera/${camId}/control`, JSON.stringify({
+                action: 'toggle-ir',
+                timestamp: new Date().toISOString()
+            }));
+        }
+
+        function toggleFullscreen(elementId) {
+            const element = document.getElementById(elementId);
+            if (!document.fullscreenElement) {
+                element.requestFullscreen().catch(err => {
+                    alert(`Error attempting to enable fullscreen: ${err.message}`);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // Update current time
+        function updateCurrentTime() {
+            const now = new Date();
+            document.getElementById('current-time').textContent = 
+                now.toLocaleTimeString() + ' • ' + 
+                now.toLocaleDateString();
+        }
+        setInterval(updateCurrentTime, 1000);
+        updateCurrentTime();
+
+        // Simulate camera updates (for demo purposes)
+        function simulateCameraUpdates() {
+            Object.keys(cameras).forEach(camId => {
+                const now = new Date().toISOString();
+                const simulatedData = {
+                    image_url: `https://via.placeholder.com/800x450?text=${camId.replace('-', '+')}+Camera+${now}`,
+                    timestamp: now,
+                    status: 'online'
+                };
+                updateCameraFeed(camId, simulatedData);
+            });
+        }
+
+        // Initialize with simulated data (remove in production)
+        simulateCameraUpdates();
+        setInterval(simulateCameraUpdates, 5000);
+    </script>
+</body>
+</html>
